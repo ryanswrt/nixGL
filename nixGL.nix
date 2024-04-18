@@ -12,11 +12,10 @@ nvidiaVersionFile ? null,
 # Enable 32 bits driver
 # This is one by default, you can switch it to off if you want to reduce a
 # bit the size of nixGL closure.
-enable32bits ? stdenv.hostPlatform.isx86
-, stdenv, writeTextFile, shellcheck, pcre, runCommand, linuxPackages
-, fetchurl, lib, runtimeShell, bumblebee, libglvnd, vulkan-validation-layers
-, mesa, libvdpau-va-gl, intel-media-driver, pkgsi686Linux, driversi686Linux
-, zlib, libdrm, xorg, wayland, gcc, zstd }:
+enable32bits ? stdenv.hostPlatform.isx86, stdenv, writeTextFile, shellcheck
+, pcre, runCommand, linuxPackages, fetchurl, lib, runtimeShell, bumblebee
+, libglvnd, vulkan-validation-layers, mesa, libvdpau-va-gl, intel-media-driver
+, pkgsi686Linux, driversi686Linux, zlib, libdrm, xorg, wayland, gcc, zstd }:
 
 let
   writeExecutable = { name, text }:
@@ -37,7 +36,8 @@ let
       '';
     };
 
-    writeNixGL = name: vadrivers: writeExecutable {
+  writeNixGL = name: vadrivers:
+    writeExecutable {
       inherit name;
       # add the 32 bits drivers if needed
       text = let
@@ -51,21 +51,28 @@ let
         '');
       in ''
         #!${runtimeShell}
-        export LIBGL_DRIVERS_PATH=${lib.makeSearchPathOutput "lib" "lib/dri" mesa-drivers}
-        export LIBVA_DRIVERS_PATH=${lib.makeSearchPathOutput "out" "lib/dri" (mesa-drivers ++ vadrivers)}
-        ${''export __EGL_VENDOR_LIBRARY_FILENAMES=${mesa.drivers}/share/glvnd/egl_vendor.d/50_mesa.json${
-          lib.optionalString enable32bits
-          ":${pkgsi686Linux.mesa.drivers}/share/glvnd/egl_vendor.d/50_mesa.json"
-          }"''${__EGL_VENDOR_LIBRARY_FILENAMES:+:$__EGL_VENDOR_LIBRARY_FILENAMES}"''
+        export LIBGL_DRIVERS_PATH=${
+          lib.makeSearchPathOutput "lib" "lib/dri" mesa-drivers
         }
-        export LD_LIBRARY_PATH=${lib.makeLibraryPath mesa-drivers}:${lib.makeSearchPathOutput "lib" "lib/vdpau" libvdpau}:${glxindirect}/lib:${lib.makeLibraryPath [libglvnd]}"''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        export LIBVA_DRIVERS_PATH=${
+          lib.makeSearchPathOutput "out" "lib/dri" (mesa-drivers ++ vadrivers)
+        }
+        ${''
+          export __EGL_VENDOR_LIBRARY_FILENAMES=${mesa.drivers}/share/glvnd/egl_vendor.d/50_mesa.json${
+            lib.optionalString enable32bits
+            ":${pkgsi686Linux.mesa.drivers}/share/glvnd/egl_vendor.d/50_mesa.json"
+          }"''${__EGL_VENDOR_LIBRARY_FILENAMES:+:$__EGL_VENDOR_LIBRARY_FILENAMES}"''}
+        export LD_LIBRARY_PATH=${lib.makeLibraryPath mesa-drivers}:${
+          lib.makeSearchPathOutput "lib" "lib/vdpau" libvdpau
+        }:${glxindirect}/lib:${
+          lib.makeLibraryPath [ libglvnd ]
+        }"''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         exec "$@"
       '';
     };
   top = rec {
-    /*
-    It contains the builder for different nvidia configuration, parametrized by
-    the version of the driver and sha256 sum of the driver installer file.
+    /* It contains the builder for different nvidia configuration, parametrized by
+       the version of the driver and sha256 sum of the driver installer file.
     */
     nvidiaPackages = { version, sha256 ? null }: rec {
       nvidiaDrivers = (linuxPackages.nvidia_x11.override { }).overrideAttrs
@@ -75,14 +82,23 @@ let
           inherit version;
           src = let
             url =
-              "https://download.nvidia.com/XFree86/Linux-x86_64/${version}/NVIDIA-Linux-x86_64-${version}.run";
+              "https://us.download.nvidia.com/tesla/${version}/NVIDIA-Linux-x86_64-${version}.run";
           in if sha256 != null then
             fetchurl { inherit url sha256; }
           else
             builtins.fetchurl url;
           useGLVND = true;
-          nativeBuildInputs = oldAttrs.buildInputs ++ [zstd];
+          nativeBuildInputs = oldAttrs.buildInputs ++ [ zstd ];
         });
+      # https://us.download.nvidia.com/tesla/550.54.15/NVIDIA-Linux-x86_64-550.54.15.run
+      # nvidiaServer = nvidiaDrivers.override {
+      #   src = let
+      #     url =
+      #   in if sha256 != null then
+      #     fetchurl { inherit url sha256; }
+      #   else
+      #     builtins.fetchurl url;
+      # };
 
       nvidiaLibsOnly = nvidiaDrivers.override {
         libsOnly = true;
@@ -120,20 +136,20 @@ let
             ${lib.optionalString (api == "Vulkan")
             "export VK_LAYER_PATH=${vulkan-validation-layers}/share/vulkan/explicit_layer.d"}
             NVIDIA_JSON=(${nvidiaLibsOnly}/share/glvnd/egl_vendor.d/*nvidia.json)
-            ${lib.optionalString enable32bits "NVIDIA_JSON32=(${nvidiaLibsOnly.lib32}/share/glvnd/egl_vendor.d/*nvidia.json)"}
+            ${lib.optionalString enable32bits
+            "NVIDIA_JSON32=(${nvidiaLibsOnly.lib32}/share/glvnd/egl_vendor.d/*nvidia.json)"}
 
-            ${''export __EGL_VENDOR_LIBRARY_FILENAMES=''${NVIDIA_JSON[*]}${
-              lib.optionalString enable32bits
-              '':''${NVIDIA_JSON32[*]}''
-              }"''${__EGL_VENDOR_LIBRARY_FILENAMES:+:$__EGL_VENDOR_LIBRARY_FILENAMES}"''
-            }
+            ${''
+              export __EGL_VENDOR_LIBRARY_FILENAMES=''${NVIDIA_JSON[*]}${
+                lib.optionalString enable32bits ":\${NVIDIA_JSON32[*]}"
+              }"''${__EGL_VENDOR_LIBRARY_FILENAMES:+:$__EGL_VENDOR_LIBRARY_FILENAMES}"''}
 
               ${
-                lib.optionalString (api == "Vulkan")
-                ''export VK_ICD_FILENAMES=${nvidiaLibsOnly}/share/vulkan/icd.d/nvidia_icd.x86_64.json${
-                  lib.optionalString enable32bits
-                  ":${nvidiaLibsOnly.lib32}/share/vulkan/icd.d/nvidia_icd.i686.json"
-                }"''${VK_ICD_FILENAMES:+:$VK_ICD_FILENAMES}"''
+                lib.optionalString (api == "Vulkan") ''
+                  export VK_ICD_FILENAMES=${nvidiaLibsOnly}/share/vulkan/icd.d/nvidia_icd.x86_64.json${
+                    lib.optionalString enable32bits
+                    ":${nvidiaLibsOnly.lib32}/share/vulkan/icd.d/nvidia_icd.i686.json"
+                  }"''${VK_ICD_FILENAMES:+:$VK_ICD_FILENAMES}"''
               }
               export LD_LIBRARY_PATH=${
                 lib.makeLibraryPath ([ libglvnd nvidiaLibsOnly ]
@@ -154,12 +170,10 @@ let
       nixVulkanNvidia = nixNvidiaWrapper "Vulkan";
     };
 
+    nixGLMesa = writeNixGL "nixGLMesa" [ ];
 
-    nixGLMesa = writeNixGL "nixGLMesa" [  ];
-
-    nixGLIntel = writeNixGL "nixGLIntel"
-      ([ intel-media-driver ]
-       ++ lib.optionals enable32bits [ pkgsi686Linux.intel-media-driver ]);
+    nixGLIntel = writeNixGL "nixGLIntel" ([ intel-media-driver ]
+      ++ lib.optionals enable32bits [ pkgsi686Linux.intel-media-driver ]);
 
     nixVulkanMesa = writeExecutable {
       name = "nixVulkanIntel";
@@ -236,7 +250,7 @@ let
           versionMatch = builtins.match ".*Module  ([0-9.]+)  .*" data;
         in if versionMatch != null then builtins.head versionMatch else null;
 
-      autoNvidia = nvidiaPackages {version = nvidiaVersionAuto; };
+      autoNvidia = nvidiaPackages { version = nvidiaVersionAuto; };
     in rec {
       # The output derivation contains nixGL which point either to
       # nixGLNvidia or nixGLIntel using an heuristic.
@@ -244,6 +258,7 @@ let
         nixGLCommon autoNvidia.nixGLNvidia
       else
         nixGLCommon nixGLIntel;
+      nixGLServer = nixGLCommon autoNvidia.nixGLNvidiaServer;
     } // autoNvidia;
   };
 in top // (if nvidiaVersion != null then
